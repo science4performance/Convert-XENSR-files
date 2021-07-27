@@ -1,5 +1,5 @@
 # Convert-XENSR-files
-This is Python code to convert XENSR SESH*.DAT files to .GPX format
+This is Python code to convert XENSR SESH*.DAT files to .GPX format<br>
 I have an old XENSR unit that records GPS data and IMU data for my kitesurfing sessions.
 Unfortunately the MyXensr website is no longer maintained, so it is not possible to view my data.
 However, joriws put some partial Python code up on kitform.com: https://kiteforum.com/viewtopic.php?t=2406619
