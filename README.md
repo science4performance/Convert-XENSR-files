@@ -11,4 +11,5 @@ I have extended this code, so that it now converts XENSR SESH*.DAT files to .GPX
 - Some sample SESH*.DAT files are provided, one for kitesurfing at Hillhead and on is a bike ride, which I also recorded on my Garmin head unit
 - I struggled to interpret the events data 
 - I created a test file SESH008.DAT to try to understand the IMU data, but gave up on that
+- There are two Jupyter notebooks: one shows my experimentation and the other can be used to test the methods in the python file
 
