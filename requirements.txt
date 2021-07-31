@@ -1,0 +1,5 @@
+json5==0.9.5
+pytz==2020.1
+tzlocal==2.1
+tzwhere==3.0.3
+geopy==2.1.0

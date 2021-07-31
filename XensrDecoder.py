@@ -9,16 +9,19 @@ import pandas as pd
 import pytz
 from datetime import datetime, timedelta
 from tzwhere import tzwhere
+from pprint import pprint
+from geopy.geocoders import Nominatim
 
 
 class GPX():
-    def __init__(self,file,GPSdf):
+    def __init__(self,file,GPSdf,WPTSdf):
         self.saveas = file
         self.df = GPSdf
+        self.wpts = WPTSdf
         return
 
     def header(self):
-        return '<?xml version="1.0"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd http://www.garmin.com/xmlschemas/PowerExtension/v1 http://www.garmin.com/xmlschemas/PowerExtensionv1.xsd" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" creator="Jorge and Gavin" version="1.1" xmlns:gpxpx="http://www.garmin.com/xmlschemas/PowerExtension/v1">\n<trk>\n<trkseg>\n'
+        return '<?xml version="1.0"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd http://www.garmin.com/xmlschemas/PowerExtension/v1 http://www.garmin.com/xmlschemas/PowerExtensionv1.xsd" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" creator="Jorge and Gavin" version="1.1" xmlns:gpxpx="http://www.garmin.com/xmlschemas/PowerExtension/v1">\n'
         #return "<gpx version=\"1.1\" creator=\"Jorge and Gavin's Xensr to GPX converter\">\n"
 
     def footer(self):
@@ -27,6 +30,9 @@ class GPX():
     def save(self):
         f = open(self.saveas, "w")
         f.write(self.header())
+        for wpt in  self.wpts.values:
+            f.write(wpt)
+        f.write('<trk>\n<trkseg>\n')
         for trkpt in  self.df.values:
             f.write(trkpt)
         f.write(self.footer())
@@ -131,8 +137,23 @@ class XensrDat():
         self.JSONdata = json.loads(self.fileHandle.read(self.getJSONBytes()).decode())
         self.fileHandle.close()
 
-        return json.dumps(self.JSONdata, sort_keys=True, indent=4)
+        return #json.dumps(self.JSONdata, sort_keys=True, indent=4)
     #return data
+
+    def Summary(self):
+        when = pd.to_datetime(f"20{self.JSONdata['timestamp']}").strftime('%H:%M on %A %d %B %Y')
+        duration = pd.to_datetime(self.JSONdata['duration']*1e7).strftime('%H:%M')
+        # Initialize Nominatim API
+        geolocator = Nominatim(user_agent="geoapiExercises")
+        location = geolocator.geocode(f"{self.JSONdata['latitude']},{self.JSONdata['longitude']}").address
+        addr = location.split(',')
+        jumps = self.JSONdata['events']['jumpCount']
+        highJump = f"{self.dfEv['Height'].max() :.2f} m"
+        longAir = f"{self.dfEv['Airtime'].max() :.2f} s"
+        self.dfSumm = pd.DataFrame([when, ','.join(addr[1:5]), addr[-1],duration,jumps,highJump,longAir], \
+            index = ['When', "Where","Country","Duration","Jumps","Highest Jump","Longest Air"], \
+                columns=["Session"])
+        #pprint(location)
 
     def convertGPSLongToDegrees(self,value):
       return float(value)/self.GPSDIV
@@ -142,7 +163,19 @@ class XensrDat():
 
     def getEvents(self):
     # iterate over filestruct
-        self.event_fmt = '<40B'
+    # # header length = 40 bytes, little-endian '<'
+    # 1 EventType (=1 for jump has following struct)
+    # 4 TimeOffset * 1e5
+    # 4 Latitude * 1e7
+    # 4 Longitude * 1e7
+    # 4 Height in metres (float)
+    # 2 Impact in g
+    # 4 unknown (padding)
+    # 4 Airtime in seconds (float)
+    # 4 uknown (padding)
+    # 1 Inverted
+    # 8 padding
+        self.event_fmt = '<B 3l f H 4x f 4x B 8x'
         self.event_len = struct.calcsize(self.event_fmt)
         self.event_unpack = struct.Struct(self.event_fmt).unpack_from
 
@@ -156,10 +189,17 @@ class XensrDat():
         #self.events = data.iter_unpack('<40B',data) ####GF EDIT
         self.events = struct.iter_unpack(self.event_fmt,data)
         #self.header = self.header_unpack(data)
-
-        from pprint import pprint
-        pprint(list(self.events))
-
+        pprint("Collected events...")
+        self.dfEv = pd.DataFrame(self.events, columns=['Type', 'Timeoffset','Lat','Lon','Height','Impact','Airtime','Inverted'])
+        self.dfEv['Timeoffset'] = self.dfEv['Timeoffset'].divide(self.GPSDIV).multiply(self.HDSDIV)
+        self.dfEv['Time into session'] = pd.to_datetime(self.dfEv['Timeoffset'].astype('int'), unit='s').dt.time
+        self.dfEv[['Lat','Lon']] = self.dfEv[['Lat','Lon']].divide(self.GPSDIV)
+        self.dfEv['Impact'] = self.dfEv['Impact'].divide(1e3)
+        self.dfEv[['Height','Airtime','Impact']] = self.dfEv[['Height','Airtime','Impact']].round(2)
+        self.dfEv = self.dfEv.loc[self.dfEv['Type']==1,['Time into session','Height','Airtime','Impact','Inverted','Lat','Lon']]
+        self.dfEv['n'] = range(1,len(self.dfEv)+1)
+        self.dfEv['Wpts'] = self.dfEv.apply(lambda x: f'<wpt lat="{x.Lat}" lon="{x.Lon}">\n<name>Jump {x.n}: Height {x.Height}m Airtime {x.Airtime}s Impact {x.Impact} {"Inverted" if x.Inverted else ""}</name>\n<color>yellow</color>\n<sym>{"star" if x.Height==self.dfEv.Height.max() else "circle"}</sym></wpt>\n',axis=1)
+             
     def decodeXensrTimeStamp(self):
         self.tsyear = int(self.header[15]+2000)
         self.tsmon = int(self.header[16])
@@ -174,7 +214,6 @@ class XensrDat():
        return self.tsepoch + offset
 
     def headerDebug(self):
-    #from pprint import pprint
     #pprint(self.header)
         self.output = []
         self.output.append("Xensr file version %d.%02d " % (int(self.header[1]), int(self.header[2])))
@@ -279,7 +318,7 @@ class MyFrame(Frame):
         self.button = Button(self, text="Open Xensr SESH.DAT", command=self.load_file)
         self.button.grid(row=1, column=0, sticky=W)
 
-        self.convert = Button(self, text="Convert and save GPX v1.1", state=DISABLED, command=self.save_file)
+        self.convert = Button(self, text="Save GPX with jumps v1.2", state=DISABLED, command=self.save_file)
         self.convert.grid(row=1, column=1, sticky=W)
 
         self.quit = Button(self, text="Quit", command=self.closeWindow)
@@ -305,8 +344,15 @@ class MyFrame(Frame):
                 self.text.insert(END, "Processing header\n")
                 self.data.getHeader()
                 self.text.insert(END, "\n".join(self.data.headerDebug()))
-                self.text.insert(END, "JSON container:\n" + str(self.data.getJSONData()) + "\n")
-                self.text.insert(END, "Processing data..."+ "\n")
+                self.text.insert(END, "Get JSON data:\n" )
+                self.data.getJSONData()
+                self.text.insert(END, "Get Events data:\n" )
+                self.data.getEvents()
+                self.data.Summary()
+                self.text.insert(END,self.data.dfSumm)
+                self.text.insert(END, "\n\nJump Data\n" )
+                self.text.insert(END, self.data.dfEv.iloc[:,:-4])
+                self.text.insert(END, "\nProcessing GPS data..."+ "\n")
                 self.data.getGPSdf()
                 self.data.processGPSdf()
                 self.text.insert(END, "READY to convert"+ "\n")
@@ -327,25 +373,20 @@ class MyFrame(Frame):
     def save_file(self):
         # TODO: check if file opened first
         if not self.data.filename: return
+        initialfilename = f"{self.data.filename.split('.')[0]}_{self.data.JSONdata['timestamp']}"
         savename = asksaveasfilename(filetypes=(("GPX files", "*.GPX"),
-        ("All files", "*.*") ), initialfile=self.data.filename+".GPX")
+        ("All files", "*.*") ), initialfile=initialfilename+'.GPX')
 
         if savename:
             try:
-                self.text.insert(END,"Saving file: " + savename + "\n")
-
-                self.gpxout = GPX(savename,self.data.GPSdf);
+                self.gpxout = GPX(savename,self.data.GPSdf,self.data.dfEv['Wpts']);
                 self.gpxout.save()
+                self.text.insert(END, "\n GPX file saved:" +savename + "\n")
 
-                #self.text.insert(END, self.gpxout.header())
+                # Save csv of event data (jumps)
+                #self.data.dfEv.to_csv(f"{savename[:-4]}.CSV") 
+                #self.text.insert(END, "\n Jump data saved in:" +savename[:-4] + ".CSV\n")
 
-                # setup iterator or something to go over wpt-data (events)                
-                #self.data.getEvents()
-                #for trkpt in self.data.GPSdf.values:
-                #    self.text.insert(END, trkpt+ "\n")
-                
-                #self.text.insert(END, self.gpxout.footer())
-                self.text.insert(END, "\n File saved:" +savename + "\n")
             except IOError as err:
                 self.text.insert(END, "IO error: {0}".format(err))
             except OSError as err:
@@ -356,7 +397,7 @@ class MyFrame(Frame):
         return
 
     def closeWindow(self):
-        self.text.insert(END, "Goodbye\n")
+        self.text.insert(END, "\nGoodbye\n\nClose this window")
         self.master.title('Close this window')
         #self.destroy() # close this window's buttos
         #self.master.destroy() # remove window
